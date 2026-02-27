@@ -1,116 +1,156 @@
-# HG002 Genomic Variant Calling Workflow
+# HG002 Variant Calling Pipeline
 
-## Project Overview
-This repository contains an end-to-end pipeline for identifying genetic variants using **PacBio HiFi** sequencing data. The project focuses on the well-characterized **HG002** reference sample (Ashkenazi son) from the Genome in a Bottle (GIAB) consortium. By comparing individual DNA sequences against the **GRCh38** reference genome, the pipeline detects SNPs and INDELs across chromosomes 1-22.
-
-## Technology Stack
-The architecture leverages three primary technologies for high-performance computing (HPC):
-* **Nextflow (DSL2)**: Serves as the core workflow engine, managing the parallel execution of variant calling tools.
-* **Singularity/Apptainer**: Ensures complete reproducibility by executing each bioinformatics tool within its own isolated container.
-* **SLURM**: Acts as the cluster's job scheduler, handling resource allocation and job queues.
+### **Workflow Architecture**
+`minimap2 (map-hifi)` → `samtools sort/index` → `Clair3` → `VCF` → `hap.py benchmarking`
 
 ---
 
-## Workflow Steps
-The pipeline is divided into several modular stages:
+## **Project Overview**
+This repository contains a reproducible bioinformatics pipeline designed to process PacBio HiFi sequencing data from the **HG002** (GIAB Ashkenazi son) reference sample. 
 
-1. **Alignment**: Mapping HiFi reads to the GRCh38 reference using **Minimap2**.
-2. **Post-Processing**: Sorting and indexing the alignment files with **Samtools**.
-3. **Variant Discovery**: Concurrent variant calling using two deep-learning engines:
-    * **Clair3** (utilizing the hifi_revio model).
-    * **DeepVariant (v1.6.1)**.
-4. **Filtering**: Using **BCFtools** to isolate high-quality calls for chromosomes 1-22.
-5. **Evaluation**: Benchmarking performance against the **NIST v4.2.1** truth set using **hap.py**.
+The workflow automates the alignment of long reads to the **GRCh38** human reference genome, performs high-accuracy small variant calling (SNVs and Indels) via **Clair3**, and evaluates performance metrics against the official **GIAB v4.2.1** ground-truth dataset.
+
+## **Core Objectives**
+* **Reproducibility:** Utilize **Nextflow (DSL2)** and **Singularity/Apptainer** for consistent environment management.
+* **Alignment:** Execute optimized long-read mapping using the `map-hifi` preset in **minimap2**.
+* **Data Processing:** Generate standardized, coordinate-sorted, and indexed BAM files using **samtools**.
+* **Variant Discovery:** Identify genetic variations using the deep-learning-based **Clair3** caller.
+* **Validation:** Quantify pipeline precision and recall using the **hap.py** benchmarking engine.
 
 ---
 
-## Usage Instructions
+## **Technical Prerequisites**
+* **Nextflow** (v22.10.0+ recommended)
+* **Singularity** or **Apptainer**
+* **Java Runtime** (JRE 11 or later)
 
-### 1. Setup
-Clone the repository to your HPC environment:
+---
+
+## **Directory Structure**
+```text
+hg002-variant-calling-pipeline/
+├── main.nf               # Core Nextflow workflow logic
+├── nextflow.config       # Container and resource definitions
+├── run_pipeline.sh       # Shell wrapper for easy execution
+├── README.md             # Documentation
+├── data/
+│   ├── GRCh38.fa                                          # Human reference genome
+│   ├── HG002_quarter.fastq.gz                             # Sample HiFi input reads
+│   ├── HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz         # GIAB gold-standard VCF
+│   └── HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed # Confident regions BED
+└── containers/
+    ├── minimap2.sif      # Singularity Image: Alignment
+    ├── samtools.sif      # Singularity Image: BAM Utilities
+    └── clair3.sif        # Singularity Image: Variant Calling
+```
+## Pipeline Parameters
+
+### Mandatory Inputs
+| Parameter | Description |
+| :--- | :--- |
+| `--reference` | Path to the GRCh38 human reference genome (FASTA) |
+| `--reads` | Input PacBio HiFi sequencing data (FASTQ/FASTQ.GZ) |
+| `--model_path` | Location of the pre-trained Clair3 model for HiFi data |
+
+### Execution Options
+| Parameter | Default | Description |
+| :--- | :--- | :--- |
+| `--sample` | *Auto-detected* | Label used for naming output files |
+| `--outdir` | `results` | Target directory for all pipeline results |
+| `--threads` | `8` | Total CPU cores designated for the workflow |
+
+---
+
+## Execution Guide
+
+### Option A: Using the Wrapper Script
 ```bash
-git clone [https://github.com/javeria-butt/hg002-variant-calling-pipeline.git]
-cd hg002-variant-calling-pipeline
+bash run_pipeline.sh
 ```
-### 2. Execute via SLURM
+### Option B: Direct Nextflow Execution
+```bash
+nextflow run main.nf -profile singularity \
+  --reference data/GRCh38.fa \
+  --reads data/HG002_quarter.fastq.gz \
+  --model_path /shared/clair3_models/hifi \
+  --sample HG002 \
+  --outdir results \
+  --threads 8
 ```
-sbatch nextflow_pipeline.sh
+### Option C: HPC Execution (Local SIF Mode)
+For offline environments or clusters with restricted image pulling:
+```bash
+nextflow run main.nf -profile singularity \
+  --use_local_sifs true \
+  --sif_minimap2 containers/minimap2.sif \
+  --sif_samtools containers/samtools.sif \
+  --sif_clair3   containers/clair3.sif \
+  --reference data/GRCh38.fa \
+  --reads data/HG002_quarter.fastq.gz \
+  --model_path /shared/clair3_models/hifi \
+  --outdir results
 ```
-### 3. Monitor Results
-```
-squeue -u your_username
-tail -f logs/nextflow_*.log
-```
-### OR Run Directly via SLURM
-```
-sbatch pipeline.sh
-```
-## Benchmarking Results (Chr1-22)
+## Workflow Stages
 
-Performance was evaluated against the **GIAB HG002 NISTv4.2.1** truth set using `hap.py` with the `vcfeval` engine, restricted to chromosomes 1-22.
-
-**Note on recall:** A quarter subset of the full HG002 dataset was used. Low recall is expected as many genomic regions lacked sufficient read coverage to detect variants. At full coverage, both tools typically achieve over 99% recall. The precision values, however, reflect true tool accuracy.
-
-### SNP Performance
-| Metric | Clair3 | DeepVariant |
-| :--- | :--- | :--- |
-| Variants Called | 252,391 | 163,639 |
-| True Positives | 167,468 | 101,556 |
-| False Positives | 35,508 | 31,719 |
-| **Precision** | **82.5%** | **76.2%** |
-| **Recall** | **4.98%** | **3.02%** |
-| F1 Score | 0.094 | 0.058 |
-
-### INDEL Performance
-| Metric | Clair3 | DeepVariant |
-| :--- | :--- | :--- |
-| Variants Called | 26,778 | 24,264 |
-| True Positives | 11,148 | 10,792 |
-| False Positives | 5,164 | 5,825 |
-| **Precision** | **68.8%** | **64.9%** |
-| **Recall** | **2.12%** | **2.05%** |
-| F1 Score | 0.041 | 0.040 |
-
----
-
-## Key Findings
-* **Clair3** outperformed DeepVariant at this coverage level with higher recall and precision for SNPs.
-* **DeepVariant** is more conservative — it called fewer variants but maintained competitive INDEL precision.
-* **High Precision**: Both tools showed high precision, meaning the calls they made were mostly correct.
-* **Recall Explanation**: Low recall is expected and fully explained by the quarter-subset input data.
-
----
-
-## Repository Contents
-| File | Description |
-| :--- | :--- |
-| `variant_calling.nf` | Nextflow workflow — runs Clair3 and DeepVariant in parallel via Singularity |
-| `nextflow_pipeline.sh` | SLURM script — submits the Nextflow pipeline to the HPC cluster |
-| `pipeline.sh` | SLURM script — runs the full pipeline directly via Apptainer |
-| `nextflow.config` | Nextflow config — sets up Singularity container binding and run options |
-| `deepvariant.nf` | Standalone Nextflow script for DeepVariant only |
-
----
-
-## Tools and Containers
-| Tool | Version | Container | Purpose |
+| Step | Process | Tool | Primary Purpose |
 | :--- | :--- | :--- | :--- |
-| **Minimap2** | latest | `docker://staphb/minimap2` | Read alignment |
-| **Samtools** | latest | `docker://staphb/samtools` | BAM processing |
-| **Clair3** | latest | `docker://hkubal/clair3` | Variant calling via Nextflow |
-| **DeepVariant** | 1.6.1 | `docker://google/deepvariant:1.6.1` | Variant calling via Nextflow |
-| **BCFtools** | latest | `docker://staphb/bcftools` | VCF filtering (chr1-22) |
-| **hap.py** | latest | `docker://pkrusche/hap.py` | Benchmarking vs GIAB |
+| **1** | `SETUP_CHECK` | `minimap2` | Validates file paths and system environment |
+| **2** | `INDEX_REF` | `minimap2` | Generates reference genome index files |
+| **3** | `ALIGN_READS` | `minimap2` | Maps HiFi reads using the `map-hifi` profile |
+| **4** | `PROCESS_BAM` | `samtools` | Coordinate sorting and BAI index generation |
+| **5** | `CALL_VARIANTS`| `Clair3` | Deep-learning based SNV and Indel calling |
+
+ ## Expected Output Files
+Upon completion of the workflow, the `results/` directory will contain the following:
+
+* **HG002.sorted.bam & .bai**: The final coordinate-sorted alignments and their associated index.
+* **HG002.vcf.gz & .tbi**: The compressed output of the variant calling process along with its index.
+* **HG002.sam**: The initial unsorted alignment file (if the retention option is enabled).
+
+## Performance Benchmarking
+The pipeline's output was verified against the **NIST v4.2.1** benchmark set (spanning chromosomes 1-22) using the `hap.py` tool equipped with the `vcfeval` engine.
+
+### Benchmarking Command
+```bash
+hap.py \
+  data/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz \
+  results/HG002.vcf.gz \
+  -f data/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed \
+  -r data/GRCh38.fa \
+  -o results/happy/results \
+  --engine=vcfeval \
+  --threads=8
+```
+### Summary Metrics
+
+#### SNP Analysis
+| Metric | Result |
+| :--- | :--- |
+| Variants Identified | 252,391 |
+| True Positives (TP) | 167,468 |
+| **Precision** | **82.5%** |
+| **Recall** | **4.98%** |
+| F1 Score | 0.094 |
+
+#### INDEL Analysis
+| Metric | Result |
+| :--- | :--- |
+| Variants Identified | 26,778 |
+| True Positives (TP) | 11,148 |
+| **Precision** | **68.8%** |
+| **Recall** | **2.12%** |
+| F1 Score | 0.041 |
+
+> **Note:** These performance figures are based on a **25% subsample** of the HG002 library. The reduced recall is expected due to the lower sequencing depth of this specific test set. Standard, full-depth HiFi data typically achieves >99% recall.
 
 ---
 
-## Data Summary
-| Parameter | Value |
-| :--- | :--- |
-| **Sample** | HG002 (Ashkenazi son, GIAB reference sample) |
-| **Sequencing** | PacBio HiFi (Revio chemistry) |
-| **Input** | 25% subset (~502MB FASTQ) |
-| **Reference** | GRCh38 (hg38) |
-| **Truth set** | GIAB NISTv4.2.1 (chr1-22, GRCh38) |
+## Software Inventory
 
+| Tool | Version | Source Container |
+| :--- | :--- | :--- |
+| **Minimap2** | 2.28 | `quay.io/biocontainers/minimap2` |
+| **Samtools** | 1.20 | `quay.io/biocontainers/samtools` |
+| **Clair3** | Latest | `docker://hkubal/clair3` |
+| **hap.py** | Latest | `docker://pkrusche/hap.py` |
 
