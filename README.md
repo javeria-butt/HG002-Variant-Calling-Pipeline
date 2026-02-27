@@ -1,4 +1,9 @@
 # HG002 Variant Calling Pipeline
+![Nextflow](https://img.shields.io/badge/Nextflow%20-%23007D8A.svg?style=for-the-badge&logo=nextflow&logoColor=white)
+![Singularity](https://img.shields.io/badge/Singularity-Container-blue?style=for-the-badge)
+![Clair3](https://img.shields.io/badge/Clair3-Variant_Calling-orange?style=for-the-badge)
+![PacBio](https://img.shields.io/badge/PacBio-HiFi_Data-yellow?style=for-the-badge)
+---
 
 ### **Workflow Architecture**
 `minimap2 (map-hifi)` → `samtools sort/index` → `Clair3` → `VCF` → `hap.py benchmarking`
